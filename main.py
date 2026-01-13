@@ -1,10 +1,11 @@
 import telebot
+from telebot import types
 import requests
 from flask import Flask
 from threading import Thread
 import os
 
-# --- നിങ്ങളുടെ വിവരങ്ങൾ ഇവിടെ ചേർക്കുക ---
+# --- CREDENTIALS ---
 BOT_TOKEN = '8230498036:AAHHvVrqjPAVzPuww0a2Y7ZPz8YJINHGLS4'
 GOOGLE_API_KEY = 'AIzaSyBdww3w_lvPXCnBmVe3FWc4yV-jtgfOxc4'
 SEARCH_ENGINE_ID = '2287c31f5b9174d59'
@@ -12,13 +13,12 @@ SEARCH_ENGINE_ID = '2287c31f5b9174d59'
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask('')
 
-# Render-ൽ സ്ലീപ്പ് മോഡ് ഒഴിവാക്കാനുള്ള Flask സർവർ
+# Health check route for Render
 @app.route('/')
 def home():
-    return "PDF Finder Bot is Running!"
+    return "Bot is Online!"
 
 def run():
-    # Render നൽകുന്ന പോർട്ടിൽ സർവർ പ്രവർത്തിപ്പിക്കുന്നു
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -26,44 +26,75 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# Start Command
+# Handle /start command
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     welcome_text = (
-        "✨ **PDF Finder Bot**-ലേക്ക് സ്വാഗതം! ✨\n\n"
-        "നിങ്ങൾക്ക് ആവശ്യമുള്ള പുസ്തകത്തിന്റെ പേര് അയക്കൂ. "
-        "ഞാൻ ഇന്റർനെറ്റിൽ സെർച്ച് ചെയ്ത് ലിങ്കുകൾ നൽകാം. 🔎\n\n"
-        "💡 **Example:** `The Alchemist`"
+        "👋 *Hello! Welcome to PDF Finder Bot.*\n\n"
+        "I can help you find PDF files and Web links instantly.\n\n"
+        "💡 *How to use:* Just type the name of the book or topic.\n"
+        "Example: `Atomic Habits`"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown')
 
-# Search Handler
+# Handle text messages
 @bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    query = f"{message.text} filetype:pdf"
-    status_msg = bot.reply_to(message, "🔍 തിരയുകയാണ്...")
+def ask_search_type(message):
+    query = message.text
+    markup = types.InlineKeyboardMarkup()
     
-    url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={SEARCH_ENGINE_ID}&q={query}"
+    # Buttons
+    btn_pdf = types.InlineKeyboardButton("📄 Search PDF", callback_data=f"pdf|{query}")
+    btn_web = types.InlineKeyboardButton("🌐 Web Search", callback_data=f"web|{query}")
+    
+    markup.add(btn_pdf, btn_web)
+    
+    bot.reply_to(
+        message, 
+        f"🔍 *Search for:* `{query}`\nSelect search type:", 
+        reply_markup=markup, 
+        parse_mode='Markdown'
+    )
+
+# Handle Button Clicks
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    data = call.data.split('|')
+    search_type = data[0]
+    query = data[1]
+    
+    if search_type == "pdf":
+        final_query = f"{query} filetype:pdf"
+    else:
+        final_query = query
+
+    url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={SEARCH_ENGINE_ID}&q={final_query}"
+    
+    bot.answer_callback_query(call.id, "Searching...")
     
     try:
         response = requests.get(url).json()
         items = response.get('items', [])
         
         if not items:
-            bot.edit_message_text("😔 ഫയലുകളൊന്നും കണ്ടെത്താനായില്ല.", message.chat.id, status_msg.message_id)
+            bot.edit_message_text("❌ No results found.", call.message.chat.id, call.message.message_id)
             return
 
-        reply = "✅ **കണ്ടെത്തിയ ഫയലുകൾ:**\n\n"
+        reply = f"✅ *{search_type.upper()} Results:* `{query}`\n\n"
         for i, item in enumerate(items[:5], 1):
-            reply += f"📄 {i}. {item['title']}\n🔗 [Download Now]({item['link']})\n\n"
+            reply += f"{i}. *{item['title']}*\n🔗 [Download/View]({item['link']})\n\n"
         
-        bot.edit_message_text(reply, message.chat.id, status_msg.message_id, parse_mode='Markdown', disable_web_page_preview=True)
+        bot.edit_message_text(
+            reply, 
+            call.message.chat.id, 
+            call.message.message_id, 
+            parse_mode='Markdown', 
+            disable_web_page_preview=True
+        )
     except Exception as e:
-        print(f"Error: {e}")
-        bot.edit_message_text("⚠️ ഒരു സാങ്കേതിക തകരാർ സംഭവിച്ചു.", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("⚠️ An error occurred.", call.message.chat.id, call.message.message_id)
 
-# സർവറും ബോട്ടും ഒരേസമയം പ്രവർത്തിപ്പിക്കുന്നു
 if __name__ == "__main__":
     keep_alive()
-    print("✅ ബോട്ട് ഓൺലൈൻ ആയിക്കഴിഞ്ഞു!")
+    print("🚀 Bot is running...")
     bot.infinity_polling()
